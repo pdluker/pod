@@ -1,0 +1,41 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "pod",
+	"main": "pod-worker.js",
+	"compatibility_date": "2026-07-01",
+	// Static assets = cover art only. Everything else is Worker-generated.
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		// Explicit even though no static file shadows these routes today.
+		// Jul 13-14 status incident: a static data.json silently shadowed the
+		// Worker's KV-read logic. Being explicit costs nothing.
+		"run_worker_first": [
+			"/feed.xml",
+			"/audio/*",
+			"/episodes/*",
+			"/transcript/*",
+			"/"
+		]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "PODCAST_KV",
+			"id": "d0d7565915314f7d85ced9caf04d21bf",
+			"remote": true
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "POD_BUCKET",
+			"bucket_name": "pod-audio"
+		}
+	]
+	// No [triggers] block. stl-dispatcher is the sole scheduler for this
+	// pipeline -- stl-bucket had a native Friday cron running in parallel with
+	// the dispatcher's call for weeks (Jul 22), doubling that day's spend.
+	//
+	// No "ai" binding here on purpose -- image generation runs inside
+	// podcastIngest on stl-dispatcher, not on this Worker. The AI binding
+	// belongs on stl-dispatcher's wrangler.jsonc, not this one.
+}
