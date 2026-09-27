@@ -198,16 +198,20 @@ export default {
 
     // ---------------------------------------------- per-episode cover art
     // Key format must match podcast-ingest.js's imageKey exactly:
-    // `episodes/${day}.jpg`. buildFeed() references this same path directly
+    // `episodes/${day}.${ext}`. buildFeed() references this same path directly
     // as `${SHOW.siteUrl}/${ep.imageKey}` -- not through a helper -- so if
     // this route's path prefix ever changes, that reference needs updating
     // too, or itunes:image links will 404 in every podcast app at once.
-    if (path.startsWith('/episodes/') && path.endsWith('.jpg')) {
-      const id = path.slice('/episodes/'.length).replace(/\.jpg$/i, '');
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(id)) {
-        return new Response('Not found', { status: 404 });
-      }
-      const key = `episodes/${id}.jpg`;
+    //
+    // CHANGED 2026-09-27: .png accepted as well as .jpg. stl-dispatcher's
+    // cover-image chain (flux-2-dev -> lucid-origin -> flux-1-schnell) now
+    // stores whichever of JPEG/PNG the model actually returned, under the
+    // matching extension, instead of labelling everything .jpg.
+    const imgMatch = path.match(/^\/episodes\/(\d{4}-\d{2}-\d{2})\.(jpg|png)$/i);
+    if (imgMatch) {
+      const [, id, rawExt] = imgMatch;
+      const ext = rawExt.toLowerCase();
+      const key = `episodes/${id}.${ext}`;
       const obj = await env.POD_BUCKET.get(key);
       // No fallback-to-cover.jpg redirect here on purpose: buildFeed() only
       // emits <itunes:image> when imageKey is non-null, so a podcast app
@@ -219,7 +223,9 @@ export default {
       return new Response(obj.body, {
         status: 200,
         headers: {
-          'content-type': 'image/jpeg',
+          // Stored type first (set by podcast-ingest from the sniffed bytes);
+          // extension as the fallback for objects written before Sep 27.
+          'content-type': obj.httpMetadata?.contentType || (ext === 'png' ? 'image/png' : 'image/jpeg'),
           // NOT immutable -- see the identical note on the /audio/ route
           // above. This exact bug (Jul 30): a forced re-run regenerated
           // today's cover art at the same URL, but the first fetch had
