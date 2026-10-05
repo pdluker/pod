@@ -59,8 +59,14 @@ function buildFeed(episodes) {
   // don't even bother showing. Use today's/latest generated art here so the
   // cover people actually see changes daily; fall back to the static
   // cover.jpg only on a day generateCoverImage failed and imageKey is null.
+  //
+  // CHANGED 2026-10-05: also fall back when the latest cover is under
+  // 1400x1400, Apple's minimum for channel artwork. Covers are generated at
+  // 1440 since Oct 5, but the flux-1-schnell fallback model always returns
+  // 1024, and older episodes have no recorded size at all.
   const latest = episodes[0];
-  const channelImageUrl = latest && latest.imageKey
+  const bigEnough = (ep) => (ep?.imageWidth || 0) >= 1400 && (ep?.imageHeight || 0) >= 1400;
+  const channelImageUrl = latest && latest.imageKey && bigEnough(latest)
     ? `${SHOW.siteUrl}/${latest.imageKey}`
     : SHOW.imageUrl;
 
