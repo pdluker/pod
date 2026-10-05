@@ -3,6 +3,12 @@
 	"name": "pod",
 	"main": "pod-worker.js",
 	"compatibility_date": "2026-07-01",
+	// ADDED 2026-10-05: pod.stluker.com is the only address this Worker should
+	// answer on. Without these keys every deploy re-enables
+	// pod.pdluker.workers.dev (and preview URLs) -- same fix as status and
+	// stl-dispatcher. Nothing references the workers.dev address.
+	"workers_dev": false,
+	"preview_urls": false,
 	// Static assets = cover art only. Everything else is Worker-generated.
 	"assets": {
 		"directory": "./public",
