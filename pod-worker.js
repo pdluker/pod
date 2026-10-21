@@ -18,11 +18,14 @@
 
 const SHOW = {
   title: 'Earth and Orbit',
-  subtitle: 'A five-minute daily briefing on space and earth science.',
+  // CHANGED 2026-10-20: episodes have run ~3 minutes since Oct 10; the old
+  // copy still promised five to seven.
+  subtitle: 'A three-minute daily briefing on space and earth science, from St. Louis.',
   description:
-    'Every morning, a short and honest look at what happened in space and on ' +
-    'this planet - the launches, the discoveries, the storms and the science. ' +
-    'Written and narrated automatically, five to seven minutes, no clickbait. ' +
+    'Every morning at about 6:30 Central, three minutes on what happened in ' +
+    'space and on this planet - the launches, the discoveries, the storms and ' +
+    'the science - with an eye on the St. Louis sky. Written and narrated ' +
+    'automatically from public sources, with a synthetic voice; no clickbait. ' +
     'Part of the stluker.com network.',
   author: 'Paul Luker',
   email: 'pdluker@gmail.com',
@@ -33,6 +36,25 @@ const SHOW = {
   siteUrl: 'https://pod.stluker.com',
   imageUrl: 'https://pod.stluker.com/cover.jpg',
 };
+
+// ADDED 2026-10-20: manifest blurbs were the first two sentences of the full
+// script, so every description began with the same fixed welcome line, and
+// the Sep 23 and Sep 25 ones carry a raw '{"script":' prefix from the JSON
+// incident. Clean both at render time (no KV rewrite needed).
+function cleanBlurb(s) {
+  return String(s || '')
+    .replace(/^Welcome to today's Earth and Orbit for [^-]*-- where we cover some of the stories happening in space and here on Earth\.\s*/i, '')
+    .replace(/^This is Earth and Orbit for [^:]*: the morning's news from space and here on Earth\.\s*/i, '')
+    .replace(/^\{\s*"script"\s*:\s*"/, '')
+    .trim();
+}
+
+// ADDED 2026-10-20: durationSeconds was words / 2.5, which overstated every
+// episode. The audio is mp3_44100_128 (16,000 bytes per second), so the byte
+// count gives the real length for every episode already in the manifest.
+function durationOf(ep) {
+  return ep && ep.bytes ? Math.round(ep.bytes / 16000) : (ep?.durationSeconds || 0);
+}
 
 function xmlEscape(s) {
   return String(s || '')
@@ -66,9 +88,12 @@ function buildFeed(episodes) {
   // 1024, and older episodes have no recorded size at all.
   const latest = episodes[0];
   const bigEnough = (ep) => (ep?.imageWidth || 0) >= 1400 && (ep?.imageHeight || 0) >= 1400;
-  const channelImageUrl = latest && latest.imageKey && bigEnough(latest)
-    ? `${SHOW.siteUrl}/${latest.imageKey}`
-    : SHOW.imageUrl;
+  // CHANGED 2026-10-20: the channel artwork is now always the fixed 3000x3000
+  // cover.jpg. A show image that changes every day makes directories re-fetch
+  // and re-cache it and gives the show no stable identity; per-episode art
+  // still goes on each <item>. (latest/bigEnough kept for reference.)
+  void latest; void bigEnough;
+  const channelImageUrl = SHOW.imageUrl;
 
   const items = episodes.map((ep) => {
     const audioUrl = `${SHOW.siteUrl}/audio/${ep.id}.mp3`;
@@ -76,20 +101,22 @@ function buildFeed(episodes) {
     // <itunes:image> element at all, and podcast apps fall back to the
     // channel-level image (SHOW.imageUrl / cover.jpg) automatically -- that's
     // the built-in RSS behavior, not something this code needs to implement.
-    const imageTag = ep.imageKey
-      ? `\n      <itunes:image href="${SHOW.siteUrl}/${xmlEscape(ep.imageKey)}"/>`
-      : '';
+    // CHANGED 2026-10-20: items with no art of their own (Aug 17-21, Sep 23,
+    // Sep 25) now name the show cover explicitly instead of relying on apps.
+    const imageTag = `\n      <itunes:image href="${ep.imageKey ? `${SHOW.siteUrl}/${xmlEscape(ep.imageKey)}` : SHOW.imageUrl}"/>`;
+    const episodeTag = ep.episodeNumber ? `\n      <itunes:episode>${Number(ep.episodeNumber)}</itunes:episode>` : '';
+    const notes = cleanBlurb(ep.blurb) || SHOW.subtitle;
     return `    <item>
       <title>${xmlEscape(ep.title)}</title>
-      <description>${xmlEscape(ep.blurb || SHOW.subtitle)}</description>
-      <itunes:summary>${xmlEscape(ep.blurb || SHOW.subtitle)}</itunes:summary>
+      <description>${xmlEscape(notes)}</description>
+      <itunes:summary>${xmlEscape(notes)}</itunes:summary>
       <pubDate>${xmlEscape(ep.pubDate)}</pubDate>
       <guid isPermaLink="false">stluker-pod-${xmlEscape(ep.id)}</guid>
-      <link>${audioUrl}</link>
+      <link>${SHOW.siteUrl}/episode/${xmlEscape(ep.id)}</link>
       <enclosure url="${audioUrl}" length="${ep.bytes || 0}" type="audio/mpeg"/>
-      <itunes:duration>${hhmmss(ep.durationSeconds)}</itunes:duration>
+      <itunes:duration>${hhmmss(durationOf(ep))}</itunes:duration>
       <itunes:episodeType>full</itunes:episodeType>
-      <itunes:explicit>false</itunes:explicit>${imageTag}
+      <itunes:explicit>false</itunes:explicit>${episodeTag}${imageTag}
     </item>`;
   }).join('\n');
 
@@ -257,14 +284,24 @@ export default {
     }
 
     // ------------------------------------------------------- landing page
-    if (path === '/' || path === '/index.html') {
+    // CHANGED 2026-10-20: the same page renders /episode/<date> as a single,
+    // shareable episode page (feed <link> points here). Only dates still in the
+    // 60-entry manifest have a page.
+    const episodeMatch = path.match(/^\/episode\/(\d{4}-\d{2}-\d{2})\/?$/);
+    if (path === '/' || path === '/index.html' || episodeMatch) {
       let manifest = [];
       try {
         const raw = await env.PODCAST_KV.get('podcast:manifest');
         manifest = raw ? JSON.parse(raw) : [];
       } catch { manifest = []; }
-      const latest = manifest[0] || null;
-      const archive = manifest.slice(1);
+      const single = episodeMatch ? (manifest.find((e) => e.id === episodeMatch[1]) || null) : null;
+      if (episodeMatch && !single) return new Response('Not found', { status: 404 });
+      const latest = single || manifest[0] || null;
+      const archive = single ? [] : manifest.slice(1);
+      const pageTitle = single ? `${single.title} - Earth and Orbit` : 'Earth and Orbit - a daily space and earth science briefing';
+      const pageDesc = single ? (cleanBlurb(single.blurb) || SHOW.subtitle) : SHOW.description;
+      const pageUrl = single ? `${SHOW.siteUrl}/episode/${single.id}` : `${SHOW.siteUrl}/`;
+      const pageImage = single && single.imageKey ? `${SHOW.siteUrl}/${single.imageKey}` : SHOW.imageUrl;
 
       // Shared by the latest card and every archive row -- server-rendered,
       // no client JS needed for layout, but the toggle itself needs a tiny
@@ -276,7 +313,7 @@ export default {
   <div class="tbox" id="transcript-${xmlEscape(id)}" style="display:none"></div>`;
 
       const metaLine = (ep) => {
-        const mins = Math.max(1, Math.round((ep.durationSeconds || 0) / 60));
+        const mins = Math.max(1, Math.round(durationOf(ep) / 60));
         const dateStr = new Date(`${ep.id}T12:00:00Z`).toLocaleDateString('en-US', {
           month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC',
         });
@@ -284,14 +321,14 @@ export default {
         return `${epNum}${dateStr} - ~${mins} min`;
       };
 
-      const archiveHtml = archive.length ? `
+      const archiveHtml = single ? '<p style="margin:0 0 1rem"><a href="/">&larr; All episodes</a></p>' : archive.length ? `
 <div class="card">
   <strong>Past episodes</strong>
   ${archive.map((ep) => `
   <div class="archive-row">
     ${ep.imageKey ? `<img src="/${xmlEscape(ep.imageKey)}" alt="" class="archive-thumb">` : '<div class="archive-thumb archive-thumb-empty"></div>'}
     <div class="archive-meta">
-      <div class="archive-title">${xmlEscape(ep.title)}</div>
+      <div class="archive-title"><a href="/episode/${xmlEscape(ep.id)}" style="color:inherit;text-decoration:none">${xmlEscape(ep.title)}</a></div>
       <div class="archive-sub">${xmlEscape(metaLine(ep))}</div>
       <audio controls preload="none" src="/audio/${xmlEscape(ep.id)}.mp3" class="archive-audio"></audio>
       ${transcriptToggle(ep.id)}
@@ -302,7 +339,18 @@ export default {
       const html = `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Earth and Orbit</title>
+<title>${xmlEscape(pageTitle)}</title>
+<meta name="description" content="${xmlEscape(pageDesc)}">
+<link rel="canonical" href="${xmlEscape(pageUrl)}">
+<link rel="alternate" type="application/rss+xml" title="Earth and Orbit" href="${SHOW.siteUrl}/feed.xml">
+<meta property="og:type" content="${single ? 'article' : 'website'}">
+<meta property="og:site_name" content="Earth and Orbit">
+<meta property="og:title" content="${xmlEscape(single ? single.title : 'Earth and Orbit')}">
+<meta property="og:description" content="${xmlEscape(pageDesc)}">
+<meta property="og:url" content="${xmlEscape(pageUrl)}">
+<meta property="og:image" content="${xmlEscape(pageImage)}">
+${single ? `<meta property="og:audio" content="${SHOW.siteUrl}/audio/${xmlEscape(single.id)}.mp3">` : ''}
+<meta name="twitter:card" content="summary_large_image">
 <style>
 :root{color-scheme:dark}
 body{margin:0;min-height:100vh;display:grid;place-items:center;
@@ -335,14 +383,15 @@ a{color:#7ab8ff}
 <p class="sub">${xmlEscape(SHOW.subtitle)}</p>
 <div class="card">
   <strong>Subscribe</strong>
-  <p style="margin:.5rem 0 0;color:#8fa3c8">Paste this into Apple Podcasts, Overcast, or Pocket Casts:</p>
+  <p style="margin:.5rem 0 0;color:#8fa3c8">Paste this into any podcast app (Apple Podcasts, Overcast, Pocket Casts):</p>
   <code>${SHOW.siteUrl}/feed.xml</code>
+  <button type="button" class="ttoggle" onclick="navigator.clipboard.writeText('${SHOW.siteUrl}/feed.xml').then(()=>{this.textContent='Copied'})">Copy feed link</button>
 </div>
 ${latest ? `<div class="card">
   ${latest.imageKey ? `<img src="/${xmlEscape(latest.imageKey)}" alt="" style="width:100%;border-radius:10px;margin-bottom:.75rem;display:block">` : ''}
-  <strong>${xmlEscape(latest.title)}</strong>
+  <strong><a href="/episode/${xmlEscape(latest.id)}" style="color:inherit;text-decoration:none">${xmlEscape(latest.title)}</a></strong>
   <p style="margin:.3rem 0 0;color:#8fa3c8;font-size:.85rem">${xmlEscape(metaLine(latest))}</p>
-  <p style="margin:.5rem 0 0;color:#8fa3c8">${xmlEscape(latest.blurb || '')}</p>
+  <p style="margin:.5rem 0 0;color:#8fa3c8">${xmlEscape(cleanBlurb(latest.blurb))}</p>
   <audio controls preload="none" src="/audio/${xmlEscape(latest.id)}.mp3"></audio>
   ${transcriptToggle(latest.id)}
 </div>` : `<div class="card"><strong>No episodes yet.</strong>

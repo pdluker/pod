@@ -21,6 +21,7 @@
 			"/audio/*",
 			"/episodes/*",
 			"/transcript/*",
+			"/episode/*",
 			"/"
 		]
 	},
